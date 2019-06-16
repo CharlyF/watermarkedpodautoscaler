@@ -1,0 +1,11 @@
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: watermarkedpodautoscaler
+subjects:
+- kind: ServiceAccount
+  name: watermarkedpodautoscaler
+roleRef:
+  kind: Role
+  name: watermarkedpodautoscaler
+  apiGroup: rbac.authorization.k8s.io
