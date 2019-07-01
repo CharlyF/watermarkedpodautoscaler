@@ -3,20 +3,22 @@ package watermarkedpodautoscaler
 import (
 	"context"
 	"fmt"
+	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2beta1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/metrics/pkg/client/external_metrics"
+
 	"k8s.io/client-go/kubernetes"
 	"math"
 	"time"
-	apiequality "k8s.io/apimachinery/pkg/api/equality"
-	appsv1 "k8s.io/api/apps/v1"
-	autoscalingv2 "k8s.io/api/autoscaling/v2beta1"
 
 	datadoghqv1alpha1 "github.com/CharlyF/watermarkedpodautoscaler/pkg/apis/datadoghq/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -25,7 +27,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
 	"sigs.k8s.io/controller-runtime/pkg/source"
-	"k8s.io/metrics/pkg/client/external_metrics"
 	"k8s.io/kubernetes/pkg/controller/podautoscaler/metrics"
 
 )
@@ -56,11 +57,12 @@ func newReconciler(mgr manager.Manager) reconcile.Reconciler {
 	)
 	clientSet, err := kubernetes.NewForConfig(clientConfig)
 	if err != nil {
-		log.Fatal(err)
+		log.Error(err, "Error")
 	}
-	replicaCalc = NewReplicaCalculator(metricsClient, clientSet.CoreV1(), defaultTolerance)
 
-	return &ReconcileWatermarkedPodAutoscaler{client: mgr.GetClient(), scheme: mgr.GetScheme()}
+	replicaCalc := NewReplicaCalculator(metricsClient, clientSet.CoreV1(), defaultTolerance)
+
+	return &ReconcileWatermarkedPodAutoscaler{client: mgr.GetClient(), scheme: mgr.GetScheme(), replicaCalc:   replicaCalc}
 }
 
 // add adds a new Controller to mgr with r as the reconcile.Reconciler
@@ -101,7 +103,7 @@ type ReconcileWatermarkedPodAutoscaler struct {
 	scheme *runtime.Scheme
 	syncPeriod    time.Duration
 	eventRecorder record.EventRecorder
-
+	replicaCalc   *ReplicaCalculator
 }
 
 // Reconcile reads that state of the cluster for a WatermarkedPodAutoscaler object and makes changes based on the state read
@@ -181,7 +183,7 @@ func (r *ReconcileWatermarkedPodAutoscaler) Reconcile(request reconcile.Request)
 func (r *ReconcileWatermarkedPodAutoscaler) reconcileWPA( wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler, deploy *appsv1.Deployment) error {
 	defer func() {
 		if err1 := recover(); err1 != nil {
-			err = fmt.Errorf("RunTime error in reconcileCHPA: %s", err1)
+			log.Info("RunTime error in reconcileCHPA: %s", err1)
 		}
 	}()
 
@@ -285,13 +287,14 @@ func (r *ReconcileWatermarkedPodAutoscaler) reconcileWPA( wpa *datadoghqv1alpha1
 		}
 
 	}
+	log.Info(rescaleReason)
 	r.setStatus(wpa, currentReplicas, desiredReplicas, metricStatuses, rescale)
 	r.updateStatusIfNeeded(wpaStatusOriginal, wpa)
 	return nil
 }
 
 func (r *ReconcileWatermarkedPodAutoscaler) shouldScale(wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler, currentReplicas, desiredReplicas int32, timestamp time.Time) bool {
-	wpa.Status
+
 	return true // compare to the hysteresis here
 }
 // setCurrentReplicasInStatus sets the current replica count in the status of the HPA.
@@ -331,71 +334,71 @@ func (r *ReconcileWatermarkedPodAutoscaler) setStatus(wpa *datadoghqv1alpha1.Wat
 }
 
 func (r *ReconcileWatermarkedPodAutoscaler) computeReplicasForMetrics(wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler, deploy *appsv1.Deployment, metricSpecs []autoscalingv2.MetricSpec) (replicas int32, metric string, statuses []autoscalingv2.MetricStatus, timestamp time.Time, err error) {
-		currentReplicas := deploy.Status.Replicas
+		//currentReplicas := deploy.Status.Replicas
 		statuses = make([]autoscalingv2.MetricStatus, len(metricSpecs))
 
-		for i, metricSpec := range metricSpecs {
-			if deploy.Spec.Selector == nil {
-				errMsg := "selector is required"
-				r.eventRecorder.Event(wpa, corev1.EventTypeWarning, "SelectorRequired", errMsg)
-				setCondition(wpa, autoscalingv2.ScalingActive, corev1.ConditionFalse, "InvalidSelector", "the WPA target's deploy is missing a selector")
-				return 0, "", nil, time.Time{}, fmt.Errorf(errMsg)
-			}
-
-			selector, err := metav1.LabelSelectorAsSelector(deploy.Spec.Selector)
-			if err != nil {
-				errMsg := fmt.Sprintf("couldn't convert selector into a corresponding internal selector object: %v", err)
-				r.eventRecorder.Event(wpa, corev1.EventTypeWarning, "InvalidSelector", errMsg)
-				setCondition(wpa, autoscalingv2.ScalingActive, corev1.ConditionFalse, "InvalidSelector", errMsg)
-				return 0, "", nil, time.Time{}, fmt.Errorf(errMsg)
-			}
-			var replicaCountProposal int32
-			var utilizationProposal int64
-			var timestampProposal time.Time
-			var metricNameProposal string
-
-			switch metricSpec.Type {
-			case autoscalingv2.ExternalMetricSourceType:
-				if metricSpec.External.TargetAverageValue != nil {
-					replicaCountProposal, utilizationProposal, timestampProposal, err = r.replicaCalc.GetExternalPerPodMetricReplicas(currentReplicas, metricSpec.External.TargetAverageValue.MilliValue(), metricSpec.External.MetricName, chpa.Namespace, metricSpec.External.MetricSelector)
-					if err != nil {
-						r.eventRecorder.Event(chpa, v1.EventTypeWarning, "FailedGetExternalMetric", err.Error())
-						setCondition(chpa, autoscalingv2.ScalingActive, v1.ConditionFalse, "FailedGetExternalMetric", "the HPA was unable to compute the replica count: %v", err)
-						return 0, "", nil, time.Time{}, fmt.Errorf("failed to get %s external metric: %v", metricSpec.External.MetricName, err)
-					}
-					metricNameProposal = fmt.Sprintf("external metric %s(%+v)", metricSpec.External.MetricName, metricSpec.External.MetricSelector)
-					statuses[i] = autoscalingv2.MetricStatus{
-						Type: autoscalingv2.ExternalMetricSourceType,
-						External: &autoscalingv2.ExternalMetricStatus{
-							MetricSelector:      metricSpec.External.MetricSelector,
-							MetricName:          metricSpec.External.MetricName,
-							CurrentAverageValue: resource.NewMilliQuantity(utilizationProposal, resource.DecimalSI),
-						},
-					}
-				} else if metricSpec.External.TargetValue != nil {
-					replicaCountProposal, utilizationProposal, timestampProposal, err = r.replicaCalc.GetExternalMetricReplicas(currentReplicas, metricSpec.External.TargetValue.MilliValue(), metricSpec.External.MetricName, chpa.Namespace, metricSpec.External.MetricSelector)
-					if err != nil {
-						r.eventRecorder.Event(chpa, v1.EventTypeWarning, "FailedGetExternalMetric", err.Error())
-						setCondition(chpa, autoscalingv2.ScalingActive, v1.ConditionFalse, "FailedGetExternalMetric", "the HPA was unable to compute the replica count: %v", err)
-						return 0, "", nil, time.Time{}, fmt.Errorf("failed to get external metric %s: %v", metricSpec.External.MetricName, err)
-					}
-					metricNameProposal = fmt.Sprintf("external metric %s(%+v)", metricSpec.External.MetricName, metricSpec.External.MetricSelector)
-					statuses[i] = autoscalingv2.MetricStatus{
-						Type: autoscalingv2.ExternalMetricSourceType,
-						External: &autoscalingv2.ExternalMetricStatus{
-							MetricSelector: metricSpec.External.MetricSelector,
-							MetricName:     metricSpec.External.MetricName,
-							CurrentValue:   *resource.NewMilliQuantity(utilizationProposal, resource.DecimalSI),
-						},
-					}
-				} else {
-					errMsg := "invalid external metric source: neither a value target nor an average value target was set"
-					r.eventRecorder.Event(chpa, v1.EventTypeWarning, "FailedGetExternalMetric", errMsg)
-					setCondition(chpa, autoscalingv2.ScalingActive, v1.ConditionFalse, "FailedGetExternalMetric", "the HPA was unable to compute the replica count: %v", err)
-					return 0, "", nil, time.Time{}, fmt.Errorf(errMsg)
-				}
-			}
-			}
+		//for i, metricSpec := range metricSpecs {
+		//	if deploy.Spec.Selector == nil {
+		//		errMsg := "selector is required"
+		//		r.eventRecorder.Event(wpa, corev1.EventTypeWarning, "SelectorRequired", errMsg)
+		//		setCondition(wpa, autoscalingv2.ScalingActive, corev1.ConditionFalse, "InvalidSelector", "the WPA target's deploy is missing a selector")
+		//		return 0, "", nil, time.Time{}, fmt.Errorf(errMsg)
+		//	}
+		//
+		//	selector, err := metav1.LabelSelectorAsSelector(deploy.Spec.Selector)
+		//	if err != nil {
+		//		errMsg := fmt.Sprintf("couldn't convert selector into a corresponding internal selector object: %v", err)
+		//		r.eventRecorder.Event(wpa, corev1.EventTypeWarning, "InvalidSelector", errMsg)
+		//		setCondition(wpa, autoscalingv2.ScalingActive, corev1.ConditionFalse, "InvalidSelector", errMsg)
+		//		return 0, "", nil, time.Time{}, fmt.Errorf(errMsg)
+		//	}
+		//	var replicaCountProposal int32
+		//	var utilizationProposal int64
+		//	var timestampProposal time.Time
+		//	var metricNameProposal string
+		//
+		//	switch metricSpec.Type {
+		//	case autoscalingv2.ExternalMetricSourceType:
+		//		if metricSpec.External.TargetAverageValue != nil {
+		//			replicaCountProposal, utilizationProposal, timestampProposal, err = r.replicaCalc.GetExternalPerPodMetricReplicas(currentReplicas, metricSpec.External.TargetAverageValue.MilliValue(), metricSpec.External.MetricName, chpa.Namespace, metricSpec.External.MetricSelector)
+		//			if err != nil {
+		//				r.eventRecorder.Event(chpa, v1.EventTypeWarning, "FailedGetExternalMetric", err.Error())
+		//				setCondition(chpa, autoscalingv2.ScalingActive, v1.ConditionFalse, "FailedGetExternalMetric", "the HPA was unable to compute the replica count: %v", err)
+		//				return 0, "", nil, time.Time{}, fmt.Errorf("failed to get %s external metric: %v", metricSpec.External.MetricName, err)
+		//			}
+		//			metricNameProposal = fmt.Sprintf("external metric %s(%+v)", metricSpec.External.MetricName, metricSpec.External.MetricSelector)
+		//			statuses[i] = autoscalingv2.MetricStatus{
+		//				Type: autoscalingv2.ExternalMetricSourceType,
+		//				External: &autoscalingv2.ExternalMetricStatus{
+		//					MetricSelector:      metricSpec.External.MetricSelector,
+		//					MetricName:          metricSpec.External.MetricName,
+		//					CurrentAverageValue: resource.NewMilliQuantity(utilizationProposal, resource.DecimalSI),
+		//				},
+		//			}
+		//		} else if metricSpec.External.TargetValue != nil {
+		//			replicaCountProposal, utilizationProposal, timestampProposal, err = r.replicaCalc.GetExternalMetricReplicas(currentReplicas, metricSpec.External.TargetValue.MilliValue(), metricSpec.External.MetricName, chpa.Namespace, metricSpec.External.MetricSelector)
+		//			if err != nil {
+		//				r.eventRecorder.Event(chpa, v1.EventTypeWarning, "FailedGetExternalMetric", err.Error())
+		//				setCondition(chpa, autoscalingv2.ScalingActive, v1.ConditionFalse, "FailedGetExternalMetric", "the HPA was unable to compute the replica count: %v", err)
+		//				return 0, "", nil, time.Time{}, fmt.Errorf("failed to get external metric %s: %v", metricSpec.External.MetricName, err)
+		//			}
+		//			metricNameProposal = fmt.Sprintf("external metric %s(%+v)", metricSpec.External.MetricName, metricSpec.External.MetricSelector)
+		//			statuses[i] = autoscalingv2.MetricStatus{
+		//				Type: autoscalingv2.ExternalMetricSourceType,
+		//				External: &autoscalingv2.ExternalMetricStatus{
+		//					MetricSelector: metricSpec.External.MetricSelector,
+		//					MetricName:     metricSpec.External.MetricName,
+		//					CurrentValue:   *resource.NewMilliQuantity(utilizationProposal, resource.DecimalSI),
+		//				},
+		//			}
+		//		} else {
+		//			errMsg := "invalid external metric source: neither a value target nor an average value target was set"
+		//			r.eventRecorder.Event(chpa, v1.EventTypeWarning, "FailedGetExternalMetric", errMsg)
+		//			setCondition(chpa, autoscalingv2.ScalingActive, v1.ConditionFalse, "FailedGetExternalMetric", "the HPA was unable to compute the replica count: %v", err)
+		//			return 0, "", nil, time.Time{}, fmt.Errorf(errMsg)
+		//		}
+		//	}
+		//	}
 		return 0, "", []autoscalingv2.MetricStatus{}, time.Now(), nil
 }
 
