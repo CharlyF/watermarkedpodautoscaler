@@ -4,4 +4,20 @@ metadata:
   name: example-watermarkedpodautoscaler
 spec:
   # Add fields here
-  size: 3
+  maxReplicas: 3
+  minReplicas: 1
+  highWatermark: 50
+  lowWatermark: 40
+  tolerance: 0.2
+  scaleTargetRef:
+    kind: Deployment
+    name: nginx
+  metrics:
+  - type: External
+    external:
+      metricName: nginx.net.request_per_s
+      metricSelector:
+        matchLabels:
+          kube_container_name: nginx
+      targetAverageValue: 9
+

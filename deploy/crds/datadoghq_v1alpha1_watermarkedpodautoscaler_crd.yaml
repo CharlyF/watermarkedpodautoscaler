@@ -3,6 +3,16 @@ kind: CustomResourceDefinition
 metadata:
   name: watermarkedpodautoscalers.datadoghq.com
 spec:
+  additionalPrinterColumns:
+  - JSONPath: .metadata.creationTimestamp
+    name: age
+    type: date
+  - JSONPath: .spec.minReplicas
+    name: min replicas
+    type: integer
+  - JSONPath: .spec.maxReplicas
+    name: max replicas
+    type: integer
   group: datadoghq.com
   names:
     kind: WatermarkedPodAutoscaler
@@ -28,8 +38,86 @@ spec:
         metadata:
           type: object
         spec:
+          properties:
+            algorithm:
+              type: string
+            highWatermark:
+              format: double
+              type: number
+            lowWatermark:
+              format: double
+              type: number
+            maxReplicas:
+              format: int32
+              maximum: 1000
+              minimum: 1
+              type: integer
+            metrics:
+              description: specifications that will be used to calculate the desired
+                replica count
+              items:
+                type: object
+              type: array
+            minReplicas:
+              format: int32
+              maximum: 1000
+              minimum: 1
+              type: integer
+            scaleTargetRef:
+              description: 'part of HorizontalPodAutoscalerSpec, see comments in the
+                k8s-1.10.8 repo: staging/src/k8s.io/api/autoscaling/v1/types.go reference
+                to scaled resource; horizontal pod autoscaler will learn the current
+                resource consumption and will set the desired number of pods by using
+                its Scale subresource.'
+              properties:
+                apiVersion:
+                  description: API version of the referent
+                  type: string
+                kind:
+                  description: 'Kind of the referent; More info: https://git.k8s.io/community/contributors/devel/api-conventions.md#types-kinds"'
+                  type: string
+                name:
+                  description: 'Name of the referent; More info: http://kubernetes.io/docs/user-guide/identifiers#names'
+                  type: string
+              required:
+              - kind
+              - name
+              type: object
+            tolerance:
+              format: double
+              maximum: 0.99
+              minimum: 0.01
+              type: number
+          required:
+          - scaleTargetRef
           type: object
         status:
+          properties:
+            conditions:
+              items:
+                type: object
+              type: array
+            currentMetrics:
+              items:
+                type: object
+              type: array
+            currentReplicas:
+              format: int32
+              type: integer
+            desiredReplicas:
+              format: int32
+              type: integer
+            lastScaleTime:
+              format: date-time
+              type: string
+            observedGeneration:
+              format: int64
+              type: integer
+          required:
+          - currentReplicas
+          - desiredReplicas
+          - currentMetrics
+          - conditions
           type: object
   version: v1alpha1
   versions:

@@ -141,14 +141,14 @@ func (r *ReconcileWatermarkedPodAutoscaler) Reconcile(request reconcile.Request)
 
 	setWPADefault(instance)
 	if err := checkWPAValidity(instance); err != nil {
-		log.Info("Got an invalid WPA spec '%v': %v", request.NamespacedName, err)
+		log.Info(fmt.Sprintf("Got an invalid WPA spec '%v': %v", request.NamespacedName, err))
 		// The wpa spec is incorrect (most likely, in "metrics" section) stop processing it
 		// When the spec is updated, the wpa will be re-added to the reconcile queue
 		r.eventRecorder.Event(instance, corev1.EventTypeWarning, "FailedSpecCheck", err.Error())
 		setCondition(instance, autoscalingv2.AbleToScale, corev1.ConditionFalse, "FailedSpecCheck", "Invalid WPA specification: %s", err)
 		return reconcile.Result{}, nil
 	}
-	log.Info("-> wpa: %v\n", instance)
+	log.Info(fmt.Sprintf("-> wpa: %v\n", instance))
 
 	// kind := wpa.Spec.ScaleTargetRef.Kind
 	namespace := instance.Namespace
@@ -159,13 +159,13 @@ func (r *ReconcileWatermarkedPodAutoscaler) Reconcile(request reconcile.Request)
 
 	if err := r.client.Get(context.TODO(), namespacedName, deploy); err != nil {
 		// Error reading the object, repeat later
-		log.Info("Error reading Deployment '%v': %v", namespacedName, err)
+		log.Info(fmt.Sprintf("Error reading Deployment '%v': %v", namespacedName, err))
 		return resRepeat, nil
 	}
 
 	if err := controllerutil.SetControllerReference(instance, deploy, r.scheme); err != nil {
 		// Error communicating with apiserver, repeat later
-		log.Info("Can't set the controller reference for the deployment %v: %v", namespacedName, err)
+		log.Info(fmt.Sprintf("Can't set the controller reference for the deployment %v: %v", namespacedName, err))
 		return resRepeat, nil
 	}
 
@@ -183,12 +183,12 @@ func (r *ReconcileWatermarkedPodAutoscaler) Reconcile(request reconcile.Request)
 func (r *ReconcileWatermarkedPodAutoscaler) reconcileWPA( wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler, deploy *appsv1.Deployment) error {
 	defer func() {
 		if err1 := recover(); err1 != nil {
-			log.Info("RunTime error in reconcileCHPA: %s", err1)
+			log.Info(fmt.Sprintf("RunTime error in reconcileCHPA: %s", err1))
 		}
 	}()
 
 	currentReplicas := deploy.Status.Replicas
-	log.Info("-> deploy: {%v/%v replicas:%v}\n", deploy.Namespace, deploy.Name, currentReplicas)
+	log.Info(fmt.Sprintf("-> deploy: {%v/%v replicas:%v}\n", deploy.Namespace, deploy.Name, currentReplicas))
 	wpaStatusOriginal :=  wpa.Status.DeepCopy()
 
 	reference := fmt.Sprintf("%s/%s/%s", wpa.Spec.ScaleTargetRef.Kind, wpa.Namespace, wpa.Spec.ScaleTargetRef.Name)
@@ -229,14 +229,14 @@ func (r *ReconcileWatermarkedPodAutoscaler) reconcileWPA( wpa *datadoghqv1alpha1
 			if err := r.updateStatusIfNeeded(wpaStatusOriginal, wpa); err != nil {
 				r.eventRecorder.Event(wpa, corev1.EventTypeWarning, "FailedUpdateReplicas", err.Error())
 				setCondition(wpa, autoscalingv2.AbleToScale, corev1.ConditionFalse, "FailedUpdateReplicas", "the WPA controller was unable to update the number of replicas: %v", err)
-				log.Info("the WPA controller was unable to update the number of replicas: %v", err)
+				log.Info(fmt.Sprintf("the WPA controller was unable to update the number of replicas: %v", err))
 				return nil
 			}
 			r.eventRecorder.Event(wpa, corev1.EventTypeWarning, "FailedComputeMetricsReplicas", err.Error())
 			log.Info("failed to compute desired number of replicas based on listed metrics for %s: %v", reference, err)
 			return nil
 		}
-		log.Info("proposing %v desired replicas (based on %s from %s) for %s", metricDesiredReplicas, metricName, timestamp, reference)
+		log.Info(fmt.Sprintf("proposing %v desired replicas (based on %s from %s) for %s", metricDesiredReplicas, metricName, timestamp, reference))
 
 		rescaleMetric := ""
 		if metricDesiredReplicas > desiredReplicas {
@@ -252,7 +252,7 @@ func (r *ReconcileWatermarkedPodAutoscaler) reconcileWPA( wpa *datadoghqv1alpha1
 		}
 
 		desiredReplicas = r.normalizeDesiredReplicas(wpa, currentReplicas, desiredReplicas)
-		log.Info(" -> after normalization: %v", desiredReplicas)
+		log.Info(fmt.Sprintf(" -> after normalization: %d", desiredReplicas))
 
 		rescale = r.shouldScale(wpa, currentReplicas, desiredReplicas, timestamp) // HERE make magic ?
 		backoffDown := false
@@ -282,7 +282,7 @@ func (r *ReconcileWatermarkedPodAutoscaler) reconcileWPA( wpa *datadoghqv1alpha1
 		if rescale {
 			// Do something?
 		} else {
-			log.Info("decided not to scale %s to %v (last scale time was %s)", reference, desiredReplicas, wpa.Status.LastScaleTime)
+			log.Info("decided not to scale ", reference," to " ,desiredReplicas,"(last scale time was " ,wpa.Status.LastScaleTime, ")")
 			desiredReplicas = currentReplicas
 		}
 
@@ -452,7 +452,7 @@ func setWPADefault(wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler) {
 }
 
 func checkWPAValidity(wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler) error {
-	if wpa.Spec.ScaleTargetRef.Kind != "Deployement" {
+	if wpa.Spec.ScaleTargetRef.Kind != "Deployment" {
 		msg := fmt.Sprintf("configurable wpa doesn't support %s kind, use Deployment instead", wpa.Spec.ScaleTargetRef.Kind)
 		log.Info(msg)
 		return fmt.Errorf(msg)

@@ -27,8 +27,8 @@ type WatermarkedPodAutoscalerSpec struct {
 	// +kubebuilder:validation:Maximum=0.99
 	Tolerance float64 `json:"tolerance,omitempty"`
 
-	HighWaterMark float64 `json:"highwatermark,omitempty"`
-	LowWaterMark float64 `json:"lowwatermark,omitempty"`
+	HighWatermark float64 `json:"highWatermark,omitempty"`
+	LowWatermark float64 `json:"lowWatermark,omitempty"`
 
 	Algorithm string `json:"algorithm,omitempty"`
 
@@ -43,7 +43,7 @@ type WatermarkedPodAutoscalerSpec struct {
 	MinReplicas *int32 `json:"minReplicas,omitempty"`
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=1000
-	MaxReplicas int32 `json:"maxReplicas"`
+	MaxReplicas int32 `json:"maxReplicas,omitempty"`
 
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "operator-sdk generate k8s" to regenerate code after modifying this file
@@ -70,6 +70,9 @@ type WatermarkedPodAutoscalerStatus struct {
 // WatermarkedPodAutoscaler is the Schema for the watermarkedpodautoscalers API
 // +k8s:openapi-gen=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:printcolumn:name="min replicas",type="integer",JSONPath=".spec.minReplicas"
+// +kubebuilder:printcolumn:name="max replicas",type="integer",JSONPath=".spec.maxReplicas"
 type WatermarkedPodAutoscaler struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
