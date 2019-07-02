@@ -10,6 +10,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/client-go/kubernetes"
 	"math"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"time"
 
 	datadoghqv1alpha1 "github.com/CharlyF/watermarkedpodautoscaler/pkg/apis/datadoghq/v1alpha1"
@@ -31,7 +33,7 @@ import (
 
 )
 
-var log = logf.Log.WithName("controller_watermarkedpodautoscaler")
+var log = logf.Log.WithName("wpa_controller")
 
 var scalingAlgorithmHysteresis =  "hysteresis"
 var scalingAlgorithmReversedHysteresis = "reversed-hysteresis"
@@ -73,23 +75,41 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		return err
 	}
 
+	predicate := predicate.Funcs{UpdateFunc: updatePredicate}
 	// Watch for changes to primary resource WatermarkedPodAutoscaler
-	err = c.Watch(&source.Kind{Type: &datadoghqv1alpha1.WatermarkedPodAutoscaler{}}, &handler.EnqueueRequestForObject{})
-	if err != nil {
-		return err
-	}
+	err = c.Watch(&source.Kind{Type: &datadoghqv1alpha1.WatermarkedPodAutoscaler{}}, &handler.EnqueueRequestForObject{}, predicate)
+	return err
+	//if err != nil {
+	//	return err
+	//}
 
-	// TODO(user): Modify this to be the types you create that are owned by the primary resource
-	// Watch for changes to secondary resource Pods and requeue the owner WatermarkedPodAutoscaler
-	err = c.Watch(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForOwner{
-		IsController: true,
-		OwnerType:    &datadoghqv1alpha1.WatermarkedPodAutoscaler{},
-	})
-	if err != nil {
-		return err
-	}
+	// I think this is unecessary
+	//// TODO(user): Modify this to be the types you create that are owned by the primary resource
+	//// Watch for changes to secondary resource Pods and requeue the owner WatermarkedPodAutoscaler
+	//err = c.Watch(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForOwner{
+	//	IsController: true,
+	//	OwnerType:    &datadoghqv1alpha1.WatermarkedPodAutoscaler{},
+	//})
+	//if err != nil {
+	//	return err
+	//}
 
-	return nil
+	//return nil
+}
+
+// When the WPA is changed (status is changed, edited by the user, etc),
+// a new "UpdateEvent" is generated and passed to the "updatePredicate" function.
+// If the function returns "true", the event is added to the "Reconcile" queue,
+// If the function returns "false", the event is skipped.
+func updatePredicate(ev event.UpdateEvent) bool {
+	oldObject := ev.ObjectOld.(*datadoghqv1alpha1.WatermarkedPodAutoscaler)
+	newObject := ev.ObjectNew.(*datadoghqv1alpha1.WatermarkedPodAutoscaler)
+	// Add the chpa object to the queue only if the spec has changed.
+	// Status change should not lead to a requeue.
+	if !apiequality.Semantic.DeepEqual(newObject.Spec, oldObject.Spec) {
+		return true
+	}
+	return false
 }
 
 // blank assignment to verify that ReconcileWatermarkedPodAutoscaler implements reconcile.Reconciler
@@ -108,9 +128,7 @@ type ReconcileWatermarkedPodAutoscaler struct {
 
 // Reconcile reads that state of the cluster for a WatermarkedPodAutoscaler object and makes changes based on the state read
 // and what is in the WatermarkedPodAutoscaler.Spec
-// TODO(user): Modify this Reconcile function to implement your Controller logic.  This example creates
-// a Pod as an example
-// Note:
+
 // The Controller will requeue the Request to be processed again if the returned error is non-nil or
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;update;patch
@@ -305,7 +323,9 @@ func (r *ReconcileWatermarkedPodAutoscaler) setCurrentReplicasInStatus(wpa *data
 // updateStatusIfNeeded calls updateStatus only if the status of the new HPA is not the same as the old status
 func (r *ReconcileWatermarkedPodAutoscaler) updateStatusIfNeeded(wpaStatus *datadoghqv1alpha1.WatermarkedPodAutoscalerStatus, wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler) error {
 	// skip a write if we wouldn't need to update
+	log.Info(fmt.Sprintf("update if needed wpaStatus %v and new %v",wpaStatus, &wpa.Status))
 	if apiequality.Semantic.DeepEqual(wpaStatus, &wpa.Status) {
+		log.Info("Same status")
 		return nil
 	}
 	return r.updateWPA(wpa)
@@ -313,7 +333,10 @@ func (r *ReconcileWatermarkedPodAutoscaler) updateStatusIfNeeded(wpaStatus *data
 
 
 func (r *ReconcileWatermarkedPodAutoscaler) updateWPA(wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler) error {
-	return r.client.Update(context.TODO(), wpa)
+	log.Info(fmt.Sprintf("updateWPA %v", wpa))
+	e := r.client.Update(context.TODO(), wpa)
+	log.Info(fmt.Sprintf("error updating wpa %v", e))
+	return e
 }
 
 // setStatus recreates the status of the given HPA, updating the current and
