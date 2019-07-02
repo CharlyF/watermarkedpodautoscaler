@@ -43,7 +43,9 @@ func (c *ReplicaCalculator) GetExternalMetricReplicas(currentReplicas int32, tar
 	if err != nil {
 		return 0, 0, time.Time{}, err
 	}
-	metrics, timestamp, err := c.metricsClient.GetExternalMetric(metricName, namespace, labelSelector)
+	log.Info(fmt.Sprintf("Using %v", labelSelector))
+	// should do c.metricsClient.GetExternalMetric(metricName, namespace, labelSelector)
+	metrics, timestamp, err := []int64{14}, time.Now(), nil
 	if err != nil {
 		return 0, 0, time.Time{}, fmt.Errorf("unable to get external metric %s/%s/%+v: %s", namespace, metricName, selector, err)
 	}

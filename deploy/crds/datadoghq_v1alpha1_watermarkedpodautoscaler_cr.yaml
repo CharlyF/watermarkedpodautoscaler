@@ -6,7 +6,7 @@ spec:
   # Add fields here
   maxReplicas: 3
   minReplicas: 1
-  highWatermark: 50
+  highWatermark: 7
   lowWatermark: 40
   tolerance: 0.2
   scaleTargetRef:
@@ -19,5 +19,5 @@ spec:
       metricSelector:
         matchLabels:
           kube_container_name: nginx
-      targetAverageValue: 9
+      targetValue: 9
 
