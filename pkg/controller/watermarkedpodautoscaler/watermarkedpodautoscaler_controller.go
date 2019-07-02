@@ -133,6 +133,7 @@ type ReconcileWatermarkedPodAutoscaler struct {
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;update;patch
 // +kubebuilder:rbac:groups=,resources=pods,verbs=get;list
+// +kubebuilder:rbac:groups=datadoghq.com,resources=watermarkedpodautoscalers,verbs=get;list;watch;create;update;patch;delete
 func (r *ReconcileWatermarkedPodAutoscaler) Reconcile(request reconcile.Request) (reconcile.Result, error) {
 	reqLogger := log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
 	reqLogger.Info("Reconciling WatermarkedPodAutoscaler")
@@ -333,8 +334,8 @@ func (r *ReconcileWatermarkedPodAutoscaler) updateStatusIfNeeded(wpaStatus *data
 
 
 func (r *ReconcileWatermarkedPodAutoscaler) updateWPA(wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler) error {
-	log.Info(fmt.Sprintf("updateWPA %v", wpa))
-	e := r.client.Update(context.TODO(), wpa)
+	log.Info(fmt.Sprintf("updateWPA %+v", wpa))
+	e := r.client.Status().Update(context.TODO(), wpa)
 	log.Info(fmt.Sprintf("error updating wpa %v", e))
 	return e
 }
@@ -474,7 +475,7 @@ func setConditionInList(inputList []autoscalingv2.HorizontalPodAutoscalerConditi
 	existingCond.Status = status
 	existingCond.Reason = reason
 	existingCond.Message = fmt.Sprintf(message, args...)
-	log.Info(fmt.Sprintf("returned for stataus update: %v", resList))
+	log.Info(fmt.Sprintf("returned for status update: %v", resList))
 
 	return resList
 }
