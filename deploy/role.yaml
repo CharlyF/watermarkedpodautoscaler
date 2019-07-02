@@ -46,11 +46,3 @@ rules:
   - '*'
   verbs:
   - '*'
-- apiGroups:
-  - "external.metrics.k8s.io"
-  resources:
-  - "*"
-  verbs:
-  - list
-  - get
-  - watch

@@ -74,18 +74,6 @@ func schema_pkg_apis_datadoghq_v1alpha1_WatermarkedPodAutoscalerSpec(ref common.
 							Format: "double",
 						},
 					},
-					"highWatermark": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"number"},
-							Format: "double",
-						},
-					},
-					"lowWatermark": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"number"},
-							Format: "double",
-						},
-					},
 					"algorithm": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
@@ -105,7 +93,7 @@ func schema_pkg_apis_datadoghq_v1alpha1_WatermarkedPodAutoscalerSpec(ref common.
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
-										Ref: ref("k8s.io/api/autoscaling/v2beta1.MetricSpec"),
+										Ref: ref("github.com/CharlyF/watermarkedpodautoscaler/pkg/apis/datadoghq/v1alpha1.MetricSpec"),
 									},
 								},
 							},
@@ -128,7 +116,7 @@ func schema_pkg_apis_datadoghq_v1alpha1_WatermarkedPodAutoscalerSpec(ref common.
 			},
 		},
 		Dependencies: []string{
-			"github.com/CharlyF/watermarkedpodautoscaler/pkg/apis/datadoghq/v1alpha1.CrossVersionObjectReference", "k8s.io/api/autoscaling/v2beta1.MetricSpec"},
+			"github.com/CharlyF/watermarkedpodautoscaler/pkg/apis/datadoghq/v1alpha1.CrossVersionObjectReference", "github.com/CharlyF/watermarkedpodautoscaler/pkg/apis/datadoghq/v1alpha1.MetricSpec"},
 	}
 }
 

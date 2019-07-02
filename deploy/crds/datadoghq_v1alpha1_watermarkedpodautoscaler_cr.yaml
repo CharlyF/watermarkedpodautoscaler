@@ -6,8 +6,6 @@ spec:
   # Add fields here
   maxReplicas: 3
   minReplicas: 1
-  highWatermark: 7
-  lowWatermark: 40
   tolerance: 0.2
   scaleTargetRef:
     kind: Deployment
@@ -15,9 +13,10 @@ spec:
   metrics:
   - type: External
     external:
-      metricName: nginx.net.request_per_s
+      highWatermark: 42000000
+      lowWatermark: 39000000
+      metricName: docker.mem.rss
       metricSelector:
         matchLabels:
-          kube_container_name: nginx
-      targetValue: 9
-
+          env: datad0g.eu
+          image_name: mongo

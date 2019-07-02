@@ -41,12 +41,6 @@ spec:
           properties:
             algorithm:
               type: string
-            highWatermark:
-              format: double
-              type: number
-            lowWatermark:
-              format: double
-              type: number
             maxReplicas:
               format: int32
               maximum: 1000
@@ -56,6 +50,35 @@ spec:
               description: specifications that will be used to calculate the desired
                 replica count
               items:
+                properties:
+                  external:
+                    description: external refers to a global metric that is not associated
+                      with any Kubernetes object. It allows autoscaling based on information
+                      coming from components running outside of cluster (for example
+                      length of queue in cloud messaging service, or QPS from loadbalancer
+                      running outside of cluster).
+                    properties:
+                      highWatermark:
+                        type: string
+                      lowWatermark:
+                        type: string
+                      metricName:
+                        description: metricName is the name of the metric in question.
+                        type: string
+                      metricSelector:
+                        description: metricSelector is used to identify a specific
+                          time series within a given metric.
+                        type: object
+                    required:
+                    - metricName
+                    type: object
+                  type:
+                    description: type is the type of metric source.  It should be
+                      one of "Object", "Pods" or "Resource", each mapping to a matching
+                      field in the object.
+                    type: string
+                required:
+                - type
                 type: object
               type: array
             minReplicas:

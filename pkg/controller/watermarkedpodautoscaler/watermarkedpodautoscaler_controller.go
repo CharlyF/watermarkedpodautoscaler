@@ -333,7 +333,7 @@ func (r *ReconcileWatermarkedPodAutoscaler) setStatus(wpa *datadoghqv1alpha1.Wat
 	}
 }
 
-func (r *ReconcileWatermarkedPodAutoscaler) computeReplicasForMetrics(wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler, deploy *appsv1.Deployment, metricSpecs []autoscalingv2.MetricSpec) (replicas int32, metric string, statuses []autoscalingv2.MetricStatus, timestamp time.Time, err error) {
+func (r *ReconcileWatermarkedPodAutoscaler) computeReplicasForMetrics(wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler, deploy *appsv1.Deployment, metricSpecs []datadoghqv1alpha1.MetricSpec) (replicas int32, metric string, statuses []autoscalingv2.MetricStatus, timestamp time.Time, err error) {
 		currentReplicas := deploy.Status.Replicas
 		statuses = make([]autoscalingv2.MetricStatus, len(metricSpecs))
 
@@ -359,7 +359,7 @@ func (r *ReconcileWatermarkedPodAutoscaler) computeReplicasForMetrics(wpa *datad
 			var metricNameProposal string
 
 			switch metricSpec.Type {
-			case autoscalingv2.ExternalMetricSourceType:
+			case datadoghqv1alpha1.ExternalMetricSourceType:
 				// for now simplify to the max.
 				//if metricSpec.External.TargetAverageValue != nil {
 				//	replicaCountProposal, utilizationProposal, timestampProposal, err = r.replicaCalc.GetExternalPerPodMetricReplicas(currentReplicas, metricSpec.External.TargetAverageValue.MilliValue(), metricSpec.External.MetricName, chpa.Namespace, metricSpec.External.MetricSelector)
@@ -378,9 +378,9 @@ func (r *ReconcileWatermarkedPodAutoscaler) computeReplicasForMetrics(wpa *datad
 				//		},
 				//	}
 				//} else
-			    if metricSpec.External.TargetValue != nil {
+			    if metricSpec.External.HighWatermark != nil && metricSpec.External.LowWatermark != nil {
 			    	log.Info(fmt.Sprintf("We are evaluating %v", metricSpec.External))
-					replicaCountProposal, utilizationProposal, timestampProposal, err = r.replicaCalc.GetExternalMetricReplicas(currentReplicas, int64(wpa.Spec.HighWatermark), metricSpec.External.MetricName, wpa.Namespace, metricSpec.External.MetricSelector)
+					replicaCountProposal, utilizationProposal, timestampProposal, err = r.replicaCalc.GetExternalMetricReplicas(currentReplicas, metricSpec.External.LowWatermark.MilliValue(), metricSpec.External.HighWatermark.MilliValue(), metricSpec.External.MetricName, wpa.Namespace, metricSpec.External.MetricSelector)
 					log.Info(fmt.Sprintf("countProp is %v, utilProp %v, timestampoPro %v, err %v", replicaCountProposal, utilizationProposal, timestampProposal, err ))
 					if err != nil {
 						r.eventRecorder.Event(wpa, corev1.EventTypeWarning, "FailedGetExternalMetric", err.Error())
@@ -475,23 +475,11 @@ func checkWPAValidity(wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler) error {
 	return checkWPAMetricsValidity(wpa.Spec.Metrics)
 }
 
-func checkWPAMetricsValidity(metrics []autoscalingv2.MetricSpec) (err error) {
+func checkWPAMetricsValidity(metrics []datadoghqv1alpha1.MetricSpec) (err error) {
 	// This function will not be needed for the vanilla k8s.
 	// For now we check only nil pointers here as they crash the default controller algorithm
 	for _, metric := range metrics {
 		switch metric.Type {
-		case "Object":
-			if metric.Object == nil {
-				return fmt.Errorf("metric.Object is nil while metric.Type is '%s'", metric.Type)
-			}
-		case "Pods":
-			if metric.Pods == nil {
-				return fmt.Errorf("metric.Pods is nil while metric.Type is '%s'", metric.Type)
-			}
-		case "Resource":
-			if metric.Resource == nil {
-				return fmt.Errorf("metric.Resource is nil while metric.Type is '%s'", metric.Type)
-			}
 		case "External":
 			if metric.External == nil {
 				return fmt.Errorf("metric.External is nil while metric.Type is '%s'", metric.Type)
