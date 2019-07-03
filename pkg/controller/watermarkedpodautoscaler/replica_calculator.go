@@ -45,7 +45,7 @@ func (c *ReplicaCalculator) GetExternalMetricReplicas(currentReplicas int32, low
 	}
 	log.Info(fmt.Sprintf("Using %v", labelSelector))
 	// should do
-	metrics, timestamp, err := c.metricsClient.GetExternalMetric(metricName, namespace, labelSelector)//[]int64{14}, time.Now(), nil
+	metrics, timestamp, err := c.metricsClient.GetExternalMetric(metricName, namespace, labelSelector)
 	if err != nil {
 		return 0, 0, time.Time{}, fmt.Errorf("unable to get external metric %s/%s/%+v: %s", namespace, metricName, selector, err)
 	}
@@ -54,21 +54,26 @@ func (c *ReplicaCalculator) GetExternalMetricReplicas(currentReplicas int32, low
 		utilization = utilization + val
 	}
 	var usageRatio float64
+
 	log.Info(fmt.Sprintf("About to compare utilization %v vs LWM %v and HWM %v", utilization, lowMark, highMark))
 	if float64(utilization) < float64(lowMark) {
 		log.Info("Value is below lowMark so can consider downscaling.")
 		usageRatio = float64(utilization) / float64(lowMark)
+
 		if math.Abs(1.0-usageRatio) <= c.tolerance {
 			// return the current replicas if the change would be too small
 			return currentReplicas, utilization, timestamp, nil
 		}
+
 	} else if float64(utilization) > float64(highMark) {
 		log.Info("Value is above highMark so can consider upscaling.")
 		usageRatio = float64(utilization) / float64(highMark)
+
 		if math.Abs(1.0-usageRatio) <= c.tolerance {
 			// return the current replicas if the change would be too small
 			return currentReplicas, utilization, timestamp, nil
 		}
+
 	} else {
 		return currentReplicas, utilization, timestamp, nil
 	}

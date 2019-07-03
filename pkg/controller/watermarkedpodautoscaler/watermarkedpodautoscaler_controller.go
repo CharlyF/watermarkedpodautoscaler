@@ -3,34 +3,33 @@ package watermarkedpodautoscaler
 import (
 	"context"
 	"fmt"
+	datadoghqv1alpha1 "github.com/CharlyF/watermarkedpodautoscaler/pkg/apis/datadoghq/v1alpha1"
+	//"github.com/kubernetes/client-go/kubernetes/typed/core/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2beta1"
-	apiequality "k8s.io/apimachinery/pkg/api/equality"
-	"k8s.io/metrics/pkg/client/external_metrics"
-	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/client-go/kubernetes"
-	"math"
-	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	"time"
-
-	datadoghqv1alpha1 "github.com/CharlyF/watermarkedpodautoscaler/pkg/apis/datadoghq/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/kubernetes/pkg/controller/podautoscaler/metrics"
+	"k8s.io/metrics/pkg/client/external_metrics"
+	"math"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
 	"sigs.k8s.io/controller-runtime/pkg/source"
-	"k8s.io/kubernetes/pkg/controller/podautoscaler/metrics"
-
+	"time"
 )
 
 var log = logf.Log.WithName("wpa_controller")
@@ -38,8 +37,14 @@ var log = logf.Log.WithName("wpa_controller")
 var scalingAlgorithmHysteresis =  "hysteresis"
 var scalingAlgorithmReversedHysteresis = "reversed-hysteresis"
 
+var (
+	scaleUpLimitFactor  = 2.0
+	scaleUpLimitMinimum = 4.0
+)
+
 const (
 	defaultTolerance                             = 0.1
+	defaultSyncPeriod                            = time.Second * 15
 )
 
 
@@ -63,8 +68,15 @@ func newReconciler(mgr manager.Manager) reconcile.Reconciler {
 	}
 
 	replicaCalc := NewReplicaCalculator(metricsClient, clientSet.CoreV1(), defaultTolerance)
-
-	return &ReconcileWatermarkedPodAutoscaler{client: mgr.GetClient(), scheme: mgr.GetScheme(), replicaCalc:   replicaCalc}
+	//evtNamespacer := clientSet.CoreV1()
+	//broadcaster := record.NewBroadcaster()
+	//broadcaster.StartLogging(log.Info)
+	//
+	//broadcaster.StartRecordingToSink(&v1.EventSinkImpl{Interface: evtNamespacer.Events("")})
+	//recorder := broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "horizontal-pod-autoscaler"})
+	//// recorder: mgr.GetRecorder("ExtendedDaemonSet")
+	//
+	return &ReconcileWatermarkedPodAutoscaler{client: mgr.GetClient(), scheme: mgr.GetScheme(), eventRecorder: mgr.GetRecorder("wpa_controller"), replicaCalc: replicaCalc, syncPeriod: defaultSyncPeriod}
 }
 
 // add adds a new Controller to mgr with r as the reconcile.Reconciler
@@ -202,7 +214,7 @@ func (r *ReconcileWatermarkedPodAutoscaler) Reconcile(request reconcile.Request)
 func (r *ReconcileWatermarkedPodAutoscaler) reconcileWPA( wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler, deploy *appsv1.Deployment) error {
 	defer func() {
 		if err1 := recover(); err1 != nil {
-			log.Info(fmt.Sprintf("RunTime error in reconcileCHPA: %s", err1))
+			log.Info(fmt.Sprintf("RunTime error in reconcileWPA: %s", err1))
 		}
 	}()
 
@@ -223,7 +235,7 @@ func (r *ReconcileWatermarkedPodAutoscaler) reconcileWPA( wpa *datadoghqv1alpha1
 	rescaleReason := ""
 	timestamp := time.Now()
 
-	rescale := true // Do we need rescale ?
+	rescale := true
 
 	if *deploy.Spec.Replicas == 0 {
 		// Autoscaling is disabled for this resource
@@ -273,48 +285,60 @@ func (r *ReconcileWatermarkedPodAutoscaler) reconcileWPA( wpa *datadoghqv1alpha1
 		desiredReplicas = r.normalizeDesiredReplicas(wpa, currentReplicas, desiredReplicas)
 		log.Info(fmt.Sprintf(" -> after normalization: %d", desiredReplicas))
 
-		rescale = r.shouldScale(wpa, currentReplicas, desiredReplicas, timestamp) // HERE make magic ?
-		backoffDown := false
-		backoffUp := false
-		if wpa.Status.LastScaleTime != nil {
-			//downscaleForbiddenWindow := time.Duration(wpa.Spec.DownscaleForbiddenWindowSeconds) * time.Second
-			//if !wpa.Status.LastScaleTime.Add(downscaleForbiddenWindow).Before(timestamp) {
-			//	setCondition(wpa, autoscalingv2.AbleToScale, v1.ConditionFalse, "BackoffDownscale", "the time since the previous scale is still within the downscale forbidden window")
-			//	backoffDown = true
-			//}
-			//
-			//upscaleForbiddenWindow := time.Duration(wpa.Spec.UpscaleForbiddenWindowSeconds) * time.Second
-			//if !wpa.Status.LastScaleTime.Add(upscaleForbiddenWindow).Before(timestamp) {
-			//	backoffUp = true
-			//	if backoffDown {
-			//		setCondition(wpa, autoscalingv2.AbleToScale, v1.ConditionFalse, "BackoffBoth", "the time since the previous scale is still within both the downscale and upscale forbidden windows")
-			//	} else {
-			//		setCondition(wpa, autoscalingv2.AbleToScale, v1.ConditionFalse, "BackoffUpscale", "the time since the previous scale is still within the upscale forbidden window")
-			//	}
-			//}
-		}
-
-		if !backoffDown && !backoffUp {
-			// mark that we're not backing off
-			setCondition(wpa, autoscalingv2.AbleToScale, corev1.ConditionTrue, "ReadyForNewScale", "the last scale time was sufficiently old as to warrant a new scale")
-		}
-		if rescale {
-			// Do something?
-		} else {
-			log.Info("decided not to scale ", reference," to " ,desiredReplicas,"(last scale time was " ,wpa.Status.LastScaleTime, ")")
-			desiredReplicas = currentReplicas
-		}
-
+		rescale = r.shouldScale(wpa, currentReplicas, desiredReplicas, timestamp) // HERE make more magic ?
+		//backoffDown := false
+		//backoffUp := false
+		//if wpa.Status.LastScaleTime != nil {
+		//	//downscaleForbiddenWindow := time.Duration(wpa.Spec.DownscaleForbiddenWindowSeconds) * time.Second
+		//	//if !wpa.Status.LastScaleTime.Add(downscaleForbiddenWindow).Before(timestamp) {
+		//	//	setCondition(wpa, autoscalingv2.AbleToScale, v1.ConditionFalse, "BackoffDownscale", "the time since the previous scale is still within the downscale forbidden window")
+		//	//	backoffDown = true
+		//	//}
+		//	//
+		//	//upscaleForbiddenWindow := time.Duration(wpa.Spec.UpscaleForbiddenWindowSeconds) * time.Second
+		//	//if !wpa.Status.LastScaleTime.Add(upscaleForbiddenWindow).Before(timestamp) {
+		//	//	backoffUp = true
+		//	//	if backoffDown {
+		//	//		setCondition(wpa, autoscalingv2.AbleToScale, v1.ConditionFalse, "BackoffBoth", "the time since the previous scale is still within both the downscale and upscale forbidden windows")
+		//	//	} else {
+		//	//		setCondition(wpa, autoscalingv2.AbleToScale, v1.ConditionFalse, "BackoffUpscale", "the time since the previous scale is still within the upscale forbidden window")
+		//	//	}
+		//	//}
+		//}
+		//
+		//if !backoffDown && !backoffUp {
+		//	// mark that we're not backing off
+		//	setCondition(wpa, autoscalingv2.AbleToScale, corev1.ConditionTrue, "ReadyForNewScale", "the last scale time was sufficiently old as to warrant a new scale")
+		//}
 	}
-	log.Info(rescaleReason)
+	if rescale {
+		deploy.Spec.Replicas = &desiredReplicas
+		if err := r.client.Update(context.TODO(), deploy); err != nil {
+			r.eventRecorder.Eventf(wpa, corev1.EventTypeWarning ,"FailedRescale", fmt.Sprintf("New size: %d; reason: %s; error: %v", desiredReplicas, rescaleReason, err.Error()))
+			setCondition(wpa, autoscalingv2.AbleToScale, corev1.ConditionFalse, "FailedUpdateScale", "the HPA controller was unable to update the target scale: %v", err)
+			r.setCurrentReplicasInStatus(wpa, currentReplicas)
+			if err := r.updateStatusIfNeeded(wpaStatusOriginal, wpa); err != nil {
+				r.eventRecorder.Event(wpa, corev1.EventTypeWarning, "FailedUpdateReplicas", err.Error())
+				setCondition(wpa, autoscalingv2.AbleToScale, corev1.ConditionFalse, "FailedUpdateReplicas", "the WPA controller was unable to update the number of replicas: %v", err)
+				return nil
+			}
+			return nil
+		}
+		setCondition(wpa, autoscalingv2.AbleToScale, corev1.ConditionTrue, "SucceededRescale", "the HPA controller was able to update the target scale to %d", desiredReplicas)
+		r.eventRecorder.Eventf(wpa, corev1.EventTypeNormal, "SuccessfulRescale", fmt.Sprintf("New size: %d; reason: %s", desiredReplicas, rescaleReason))
+
+		log.Info(fmt.Sprintf("Successful rescale of %s, old size: %d, new size: %d, reason: %s", wpa.Name, currentReplicas, desiredReplicas, rescaleReason))
+	} else {
+		r.eventRecorder.Eventf(wpa, corev1.EventTypeNormal,"NotScaling",fmt.Sprintf("Decided not to scale %s to %d (last scale time was %v )", reference, desiredReplicas, wpa.Status.LastScaleTime))
+		desiredReplicas = currentReplicas
+	}
 	r.setStatus(wpa, currentReplicas, desiredReplicas, metricStatuses, rescale)
 	r.updateStatusIfNeeded(wpaStatusOriginal, wpa)
 	return nil
 }
 
 func (r *ReconcileWatermarkedPodAutoscaler) shouldScale(wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler, currentReplicas, desiredReplicas int32, timestamp time.Time) bool {
-
-	return true // compare to the hysteresis here
+	return desiredReplicas != currentReplicas
 }
 // setCurrentReplicasInStatus sets the current replica count in the status of the HPA.
 func (r *ReconcileWatermarkedPodAutoscaler) setCurrentReplicasInStatus(wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler, currentReplicas int32) {
@@ -324,9 +348,7 @@ func (r *ReconcileWatermarkedPodAutoscaler) setCurrentReplicasInStatus(wpa *data
 // updateStatusIfNeeded calls updateStatus only if the status of the new HPA is not the same as the old status
 func (r *ReconcileWatermarkedPodAutoscaler) updateStatusIfNeeded(wpaStatus *datadoghqv1alpha1.WatermarkedPodAutoscalerStatus, wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler) error {
 	// skip a write if we wouldn't need to update
-	log.Info(fmt.Sprintf("update if needed wpaStatus %v and new %v",wpaStatus, &wpa.Status))
 	if apiequality.Semantic.DeepEqual(wpaStatus, &wpa.Status) {
-		log.Info("Same status")
 		return nil
 	}
 	return r.updateWPA(wpa)
@@ -334,10 +356,7 @@ func (r *ReconcileWatermarkedPodAutoscaler) updateStatusIfNeeded(wpaStatus *data
 
 
 func (r *ReconcileWatermarkedPodAutoscaler) updateWPA(wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler) error {
-	log.Info(fmt.Sprintf("updateWPA %+v", wpa))
-	e := r.client.Status().Update(context.TODO(), wpa)
-	log.Info(fmt.Sprintf("error updating wpa %v", e))
-	return e
+	return r.client.Status().Update(context.TODO(), wpa)
 }
 
 // setStatus recreates the status of the given HPA, updating the current and
@@ -369,8 +388,7 @@ func (r *ReconcileWatermarkedPodAutoscaler) computeReplicasForMetrics(wpa *datad
 				return 0, "", nil, time.Time{}, fmt.Errorf(errMsg)
 			}
 
-			selector, err := metav1.LabelSelectorAsSelector(deploy.Spec.Selector)
-			log.Info(fmt.Sprintf("selector is  %v", selector))
+			_, err := metav1.LabelSelectorAsSelector(deploy.Spec.Selector)
 			if err != nil {
 				errMsg := fmt.Sprintf("couldn't convert selector into a corresponding internal selector object: %v", err)
 				r.eventRecorder.Event(wpa, corev1.EventTypeWarning, "InvalidSelector", errMsg)
@@ -403,8 +421,7 @@ func (r *ReconcileWatermarkedPodAutoscaler) computeReplicasForMetrics(wpa *datad
 				//	}
 				//} else
 			    if metricSpec.External.HighWatermark != nil && metricSpec.External.LowWatermark != nil {
-			    	log.Info(fmt.Sprintf("We are evaluating %v", metricSpec.External))
-					replicaCountProposal, utilizationProposal, timestampProposal, err = r.replicaCalc.GetExternalMetricReplicas(currentReplicas, metricSpec.External.LowWatermark.MilliValue(), metricSpec.External.HighWatermark.MilliValue(), metricSpec.External.MetricName, wpa.Namespace, metricSpec.External.MetricSelector)
+					replicaCountProposal, utilizationProposal, timestampProposal, err = r.replicaCalc.GetExternalMetricReplicas(currentReplicas, metricSpec.External.LowWatermark.Value(), metricSpec.External.HighWatermark.Value(), metricSpec.External.MetricName, wpa.Namespace, metricSpec.External.MetricSelector)
 					log.Info(fmt.Sprintf("countProp is %v, utilProp %v, timestampoPro %v, err %v", replicaCountProposal, utilizationProposal, timestampProposal, err ))
 					if err != nil {
 						r.eventRecorder.Event(wpa, corev1.EventTypeWarning, "FailedGetExternalMetric", err.Error())
@@ -451,7 +468,6 @@ func setCondition(wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler, conditionType
 // it is not present.  The new list will be returned.
 func setConditionInList(inputList []autoscalingv2.HorizontalPodAutoscalerCondition, conditionType autoscalingv2.HorizontalPodAutoscalerConditionType, status corev1.ConditionStatus, reason, message string, args ...interface{}) []autoscalingv2.HorizontalPodAutoscalerCondition {
 	resList := inputList
-	log.Info(fmt.Sprintf("Input is: %v, conditionType is: %v, Status: %v", inputList, conditionType, status))
 	var existingCond *autoscalingv2.HorizontalPodAutoscalerCondition
 	for i, condition := range resList {
 		if condition.Type == conditionType {
@@ -475,7 +491,6 @@ func setConditionInList(inputList []autoscalingv2.HorizontalPodAutoscalerConditi
 	existingCond.Status = status
 	existingCond.Reason = reason
 	existingCond.Message = fmt.Sprintf(message, args...)
-	log.Info(fmt.Sprintf("returned for status update: %v", resList))
 
 	return resList
 }
@@ -558,7 +573,7 @@ func convertDesiredReplicasWithRules(wpa *datadoghqv1alpha1.WatermarkedPodAutosc
 
 	// Do not upscale too much to prevent incorrect rapid increase of the number of master replicas caused by
 	// bogus CPU usage report from heapster/kubelet (like in issue #32304).
-	scaleUpLimit := calculateScaleUpLimit(wpa, currentReplicas)
+	scaleUpLimit := calculateScaleUpLimit(currentReplicas)
 
 	if hpaMaxReplicas > scaleUpLimit {
 		maximumAllowedReplicas = scaleUpLimit
@@ -583,12 +598,6 @@ func convertDesiredReplicasWithRules(wpa *datadoghqv1alpha1.WatermarkedPodAutosc
 	return desiredReplicas, "DesiredWithinRange", "the desired count is within the acceptable range"
 }
 
-var (
-	scaleUpLimitFactor  = 2.0
-	scaleUpLimitMinimum = 4.0
-)
-
-
-func calculateScaleUpLimit(wpa *datadoghqv1alpha1.WatermarkedPodAutoscaler, currentReplicas int32) int32 {
+func calculateScaleUpLimit(currentReplicas int32) int32 {
 	return int32(math.Max(scaleUpLimitFactor*float64(currentReplicas), scaleUpLimitMinimum))
 }
